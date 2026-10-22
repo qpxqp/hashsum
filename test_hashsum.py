@@ -8,7 +8,6 @@ from hashsum import (
     MSG_MISMATCH,
     MSG_VERIFIED,
     MULTI_ALGORITHMS,
-    XOF_LENGTH,
     HashResult,
     calculate,
     hash_data,
@@ -78,7 +77,8 @@ class TestHashData:
 class TestXOF:
     @pytest.mark.parametrize('algorithm', ['shake_128', 'shake_256'])
     def test_length(self, algorithm: str) -> None:
-        assert len(hash_data('test', algorithm)) == XOF_LENGTH * 2
+        result = hash_data('test', algorithm, xof_len=64)
+        assert len(result) == 64 * 2  # 128 hex symbols
 
     def test_shake_128_differs_from_shake_256(self) -> None:
         assert hash_data('test', 'shake_128') != hash_data('test', 'shake_256')
@@ -183,9 +183,23 @@ class TestNormalizeExpectedHash:
         assert warning is not None
         assert '64' in warning
 
-    def test_xof_no_length_check(self) -> None:
-        # shake_128 is an XOF, digest_size == 0, length check is skipped
+    def test_xof_warns_on_wrong_length_with_custom_len(self) -> None:
+        # With xof_len=16, 32 hex characters are expected. We'll give it 10.
+        _, warning = normalize_expected_hash('a' * 10, 'shake_128', xof_len=16)
+        assert warning is not None
+        assert '32' in warning
+
+    def test_xof_warns_on_wrong_length(self) -> None:
+        # SHAKE uses xof_len (default 32 bytes = 64 hex chars).
+        # Providing 10 chars should trigger a warning.
         _, warning = normalize_expected_hash('a' * 10, 'shake_128')
+        assert warning is not None
+        assert '64' in warning
+
+    def test_xof_custom_len(self) -> None:
+        # If we explicitly ask for a 16-byte XOF hash (32 hex chars),
+        # providing a 32-char hash should NOT trigger a warning.
+        _, warning = normalize_expected_hash('a' * 32, 'shake_128', xof_len=16)
         assert warning is None
 
 
@@ -336,3 +350,10 @@ class TestCLI:
         assert exit_code == 1
         captured = capsys.readouterr()
         assert captured.err != ''
+
+    def test_cli_xof_len(self, capsys) -> None:
+        # Request 16 bytes (32 hex chars) from shake_128
+        exit_code = main(["test", "-a", "shake_128", "--xof-len", "16"])
+        assert exit_code == 0
+        captured = capsys.readouterr()
+        assert len(captured.out.strip()) == 32

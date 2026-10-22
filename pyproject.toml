@@ -1,6 +1,6 @@
 [project]
 name = "hashsum"
-version = "1.0.0"
+version = "1.0.1"
 description = "Calculate and verify a cryptographic hash for a string, stdin, or a file"
 readme = "README.md"
 requires-python = ">=3.12"

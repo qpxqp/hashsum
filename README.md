@@ -12,6 +12,7 @@ Unlike standard `sha256sum` tools, `hashsum` provides a clean programmatic Pytho
 - **XOF Support:** Full support for Extendable-Output Functions like `shake_128` and `shake_256`.
 - **Clean API:** Use the `calculate()` function to get a structured `HashResult` object without printing anything to the console.
 - **Cross-platform:** Works flawlessly on Linux, macOS, and Windows.
+- **Custom XOF Length:** Specify the exact output length in bytes for SHAKE algorithms using the --xof-len flag.
 
 ## Requirements
 
@@ -43,6 +44,9 @@ uv run hashsum.py -f ./file.bin --verify <expected_hash>
 
 # List all available algorithms in your Python build
 uv run hashsum.py --list-algorithms
+
+# Calculate a SHAKE-256 hash with 64 bytes (128 hex chars) instead of default 32
+uv run hashsum.py "hello world" -a shake_256 --xof-len 64
 ```
 
 ### Exit Codes

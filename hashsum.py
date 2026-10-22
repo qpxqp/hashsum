@@ -48,7 +48,7 @@ MULTI_ALGORITHMS: tuple[str, ...] = (
 )
 
 DEFAULT_ALGORITHM = 'sha256'
-XOF_LENGTH = 32  # Output length for XOF algorithms (shake_*) in bytes
+DEFAULT_XOF_LENGTH = 32  # Default out length for XOF algo (shake_*) in bytes
 
 # --verify results
 MSG_VERIFIED = 'OK'
@@ -97,7 +97,7 @@ ERR_STDIN_WITH_TARGET = 'target argument is not used with --stdin'
 ERR_NO_TARGET = 'specify a string, file path, or use --stdin'
 ERR_MULTI_WITH_VERIFY = '--multi and --verify cannot be used together'
 ERR_FILE_AND_STDIN = 'Cannot use both --file and --stdin sources together'
-
+ERR_POSITIVE_INT = '`{value}` must be a positive integer'
 
 # ---------- parser strings ----------
 
@@ -106,6 +106,7 @@ PARSER_EPILOG = (
     'Examples:\n'
     '  hashsum "hello world"\n'
     '  hashsum -a sha512 "hello world"\n'
+    '  hashsum -a shake_256 --xof-len 64 "hello world"\n'
     '  hashsum -f ./file.bin\n'
     '  hashsum -f ./file.bin -a sha512\n'
     '  hashsum --multi "hello world"\n'
@@ -128,8 +129,18 @@ PARSER_ARG_ALGORITHM = (
     f'cannot be used with --multi and --list-algorithms'
 )
 PARSER_ARG_VERIFY = 'compare result with expected hex hash'
+PARSER_ARG_XOF_LEN = (
+    f'output length in bytes for XOF algorithms (default: {DEFAULT_XOF_LENGTH})'
+)
 
 # ---------- utilities ----------
+
+def _positive_int(value: str) -> int:
+    """Argparse type for positive integers."""
+    ivalue = int(value)
+    if ivalue <= 0:
+        raise argparse.ArgumentTypeError(ERR_POSITIVE_INT.format(value=value))
+    return ivalue
 
 def to_bytes(data: str | bytes) -> bytes:
     """Convert str to bytes (UTF-8), return bytes as is."""
@@ -156,22 +167,23 @@ def _is_xof(name: str) -> bool:
     return name.startswith('shake_')
 
 
-def _hexdigest(digest, name: str) -> str:
+def _hexdigest(digest, name: str, xof_len: int = DEFAULT_XOF_LENGTH) -> str:
     """hexdigest taking XOF algorithms into account."""
     if _is_xof(name):
-        return digest.hexdigest(XOF_LENGTH)
+        return digest.hexdigest(xof_len)
     return digest.hexdigest()
 
 
 def normalize_expected_hash(
     expected: str,
     algorithm: str | None = None,
+    xof_len: int = DEFAULT_XOF_LENGTH,
 ) -> tuple[str, str | None]:
     """Check that the expected hash is a hex string.
 
     If algorithm is provided, additionally checks the hex string length
-    against the algorithm's digest_size. For XOF algorithms (shake_*)
-    digest_size == 0, and length check is skipped.
+    against the algorithm's digest_size. For XOF algorithms (shake_*),
+    checks against xof_len.
     Returns the normalized hash and an optional warning.
     """
     value = expected.strip().lower()
@@ -183,51 +195,68 @@ def normalize_expected_hash(
         raise ValueError(ERR_EXPECTED_HASH_NOT_HEX) from exc
     warning = None
     if algorithm is not None:
-        digest_size = hashlib.new(algorithm).digest_size
-        if digest_size > 0:
-            expected_length = digest_size * 2
-            if len(value) != expected_length:
-                warning = WARN_HASH_LENGTH.format(
-                    actual=len(value),
-                    algorithm=algorithm,
-                    expected=expected_length,
-                )
+        length = len(value)
+        if _is_xof(algorithm):
+            expected_length = xof_len * 2
+        else:
+            digest_size = hashlib.new(algorithm).digest_size
+            expected_length = digest_size * 2 if digest_size > 0 else 0
+        if expected_length > 0 and length != expected_length:
+            warning = WARN_HASH_LENGTH.format(
+                actual=length,
+                algorithm=algorithm,
+                expected=expected_length,
+            )
     return value, warning
 
 
 # ---------- hash calculation ----------
 
-def hash_data(data: str | bytes, algorithm: str = DEFAULT_ALGORITHM) -> str:
+def hash_data(
+    data: str | bytes,
+    algorithm: str = DEFAULT_ALGORITHM,
+    xof_len: int = DEFAULT_XOF_LENGTH,
+) -> str:
     """Return hex hash of a string or bytes."""
     name = normalize_algorithm(algorithm)
     digest = hashlib.new(name, to_bytes(data))
-    return _hexdigest(digest, name)
+    return _hexdigest(digest, name, xof_len)
 
 
-def hash_file(path: str | Path, algorithm: str = DEFAULT_ALGORITHM) -> str:
+def hash_file(
+    path: str | Path,
+    algorithm: str = DEFAULT_ALGORITHM,
+    xof_len: int = DEFAULT_XOF_LENGTH,
+) -> str:
     """Return hex hash of a file, reading it in chunks."""
     name = normalize_algorithm(algorithm)
     if hasattr(hashlib, 'file_digest'):
         with Path(path).open('rb') as f:
             digest = hashlib.file_digest(f, name)
-            return _hexdigest(digest, name)
+            return _hexdigest(digest, name, xof_len)
     digest = hashlib.new(name)
     with Path(path).open('rb') as f:
         for chunk in iter(lambda: f.read(CHUNK_SIZE), b''):
             digest.update(chunk)
-    return _hexdigest(digest, name)
+    return _hexdigest(digest, name, xof_len)
 
 
-def hash_stdin(algorithm: str = DEFAULT_ALGORITHM) -> str:
+def hash_stdin(
+    algorithm: str = DEFAULT_ALGORITHM,
+    xof_len: int = DEFAULT_XOF_LENGTH,
+) -> str:
     """Return hex hash of data from stdin."""
     name = normalize_algorithm(algorithm)
     digest = hashlib.new(name)
     while chunk := sys.stdin.buffer.read(CHUNK_SIZE):
         digest.update(chunk)
-    return _hexdigest(digest, name)
+    return _hexdigest(digest, name, xof_len)
 
 
-def hash_multi(data: str | bytes) -> dict[str, str]:
+def hash_multi(
+    data: str | bytes,
+    xof_len: int = DEFAULT_XOF_LENGTH,
+) -> dict[str, str]:
     """Calculate a set of common hashes for a string or bytes."""
     raw = to_bytes(data)
     result: dict[str, str] = {}
@@ -235,11 +264,14 @@ def hash_multi(data: str | bytes) -> dict[str, str]:
         if name not in hashlib.algorithms_available:
             continue
         digest = hashlib.new(name, raw)
-        result[name] = _hexdigest(digest, name)
+        result[name] = _hexdigest(digest, name, xof_len)
     return result
 
 
-def hash_file_multi(path: str | Path) -> dict[str, str]:
+def hash_file_multi(
+    path: str | Path,
+    xof_len: int = DEFAULT_XOF_LENGTH,
+) -> dict[str, str]:
     """Calculate a set of common hashes of a file in one pass."""
     digests = {
         name: hashlib.new(name)
@@ -250,10 +282,13 @@ def hash_file_multi(path: str | Path) -> dict[str, str]:
         for chunk in iter(lambda: f.read(CHUNK_SIZE), b''):
             for digest in digests.values():
                 digest.update(chunk)
-    return {name: _hexdigest(dig, name) for name, dig in digests.items()}
+    return {
+        name: _hexdigest(dig, name, xof_len)
+        for name, dig in digests.items()
+    }
 
 
-def hash_stdin_multi() -> dict[str, str]:
+def hash_stdin_multi(xof_len: int = DEFAULT_XOF_LENGTH) -> dict[str, str]:
     """Calculate a set of common hashes of stdin data in one pass."""
     digests = {
         name: hashlib.new(name)
@@ -263,7 +298,10 @@ def hash_stdin_multi() -> dict[str, str]:
     while chunk := sys.stdin.buffer.read(CHUNK_SIZE):
         for digest in digests.values():
             digest.update(chunk)
-    return {name: _hexdigest(dig, name) for name, dig in digests.items()}
+    return {
+        name: _hexdigest(dig, name, xof_len)
+        for name, dig in digests.items()
+    }
 
 
 # ---------- high-level API ----------
@@ -276,6 +314,7 @@ def calculate(
     multi: bool = False,
     algorithm: str = DEFAULT_ALGORITHM,
     verify: str | None = None,
+    xof_len: int = DEFAULT_XOF_LENGTH,
 ) -> HashResult:
     """Entry point for calculating and verifying hashes programmatically.
 
@@ -294,6 +333,7 @@ def calculate(
         verify: An optional expected hex digest. If provided, the calculated
             hash is compared against this value using a constant-time
             comparison.
+        xof_len: Output length in bytes for XOF algorithms (e.g., shake_128).
 
     Returns:
         A HashResult namedtuple containing:
@@ -325,12 +365,12 @@ def calculate(
         hash_single = partial(hash_data, tgt)
         hash_all = partial(hash_multi, tgt)
     if multi:
-        return HashResult(digests=hash_all())
+        return HashResult(digests=hash_all(xof_len=xof_len))
     name = normalize_algorithm(algorithm)
-    actual = hash_single(name)
+    actual = hash_single(name, xof_len=xof_len)
     digests = {name: actual}
     if verify is not None:
-        expected, warning = normalize_expected_hash(verify, name)
+        expected, warning = normalize_expected_hash(verify, name, xof_len)
         ok = hmac.compare_digest(actual, expected)
         return HashResult(
             digests=digests,
@@ -388,6 +428,13 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar='HASH',
         help=PARSER_ARG_VERIFY,
     )
+    parser.add_argument(
+        '--xof-len',
+        type=_positive_int,
+        default=DEFAULT_XOF_LENGTH,
+        metavar='BYTES',
+        help=PARSER_ARG_XOF_LEN,
+    )
     return parser
 
 
@@ -439,6 +486,7 @@ def main(argv: list[str] | None = None) -> int:
             multi=args.multi,
             algorithm=args.algorithm,
             verify=args.verify,
+            xof_len=args.xof_len,
         )
     except OSError as exc:
         sys.stderr.write(_format_io_error(args, exc) + '\n')
