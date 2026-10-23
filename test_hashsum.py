@@ -221,6 +221,21 @@ class TestCalculateSimple:
         with pytest.raises(ValueError, match='specify a string'):
             calculate(None)
 
+    def test_warns_on_path_like_target(self) -> None:
+        res = calculate('./some/file.bin')
+        assert len(res.warnings) == 1
+        assert 'forget' in res.warnings[0].lower()
+
+    def test_no_warning_for_plain_string(self) -> None:
+        res = calculate('test')
+        assert res.warnings == ()
+
+    def test_no_warning_with_file_flag(self, tmp_path) -> None:
+        f = tmp_path / 'data.bin'
+        f.write_bytes(b'test')
+        res = calculate(str(f), file=True)
+        assert res.warnings == ()
+
 
 class TestCalculateFile:
     def test_file(self, tmp_path) -> None:
@@ -357,3 +372,10 @@ class TestCLI:
         assert exit_code == 0
         captured = capsys.readouterr()
         assert len(captured.out.strip()) == 32
+
+    def test_cli_warns_on_path_like_target(self, capsys) -> None:
+        exit_code = main(['./nope/file.bin'])
+        assert exit_code == 0
+        captured = capsys.readouterr()
+        assert 'forget' in captured.err.lower()
+

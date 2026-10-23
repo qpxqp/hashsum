@@ -77,6 +77,10 @@ WARN_HASH_LENGTH = (
     'Warning: hash length is {actual}, '
     'expected {expected} for `{algorithm}`'
 )
+WARN_TARGET_LOOKS_LIKE_PATH = (
+    'Warning: `{target}` looks like a file path. '
+    'Did you forget -f/--file?'
+)
 
 # I/O errors
 ERR_IO_STDIN = 'I/O error (stdin): {exc}'
@@ -96,7 +100,7 @@ ERR_LIST_WITH_VERIFY = (
 ERR_STDIN_WITH_TARGET = 'target argument is not used with --stdin'
 ERR_NO_TARGET = 'specify a string, file path, or use --stdin'
 ERR_MULTI_WITH_VERIFY = '--multi and --verify cannot be used together'
-ERR_FILE_AND_STDIN = 'Cannot use both --file and --stdin sources together'
+ERR_FILE_AND_STDIN = 'Cannot use both -f/--file and --stdin sources together'
 ERR_POSITIVE_INT = '`{value}` must be a positive integer'
 
 # ---------- parser strings ----------
@@ -172,6 +176,19 @@ def _hexdigest(digest, name: str, xof_len: int = DEFAULT_XOF_LENGTH) -> str:
     if _is_xof(name):
         return digest.hexdigest(xof_len)
     return digest.hexdigest()
+
+def _looks_like_path(target: str) -> bool:
+    """Heuristic: does the target look like a file path?"""
+    if not target:
+        return False
+    if '/' in target or '\\' in target:
+        return True
+    if target.startswith('~'):
+        return True
+    try:
+        return Path(target).exists()
+    except OSError:
+        return False
 
 
 def normalize_expected_hash(
@@ -355,6 +372,12 @@ def calculate(
     if file and stdin:
         raise ValueError(ERR_FILE_AND_STDIN)
     tgt = cast(str, target)
+    warnings_list = []
+    if not file and not stdin and target is not None:
+        if _looks_like_path(target):
+            warnings_list.append(
+                WARN_TARGET_LOOKS_LIKE_PATH.format(target=target)
+            )
     if file:
         hash_single = partial(hash_file, tgt)
         hash_all = partial(hash_file_multi, tgt)
@@ -365,19 +388,27 @@ def calculate(
         hash_single = partial(hash_data, tgt)
         hash_all = partial(hash_multi, tgt)
     if multi:
-        return HashResult(digests=hash_all(xof_len=xof_len))
+        return HashResult(
+            digests=hash_all(xof_len=xof_len),
+            warnings=tuple(warnings_list),
+        )
     name = normalize_algorithm(algorithm)
     actual = hash_single(name, xof_len=xof_len)
     digests = {name: actual}
     if verify is not None:
         expected, warning = normalize_expected_hash(verify, name, xof_len)
+        if warning:
+            warnings_list.append(warning)
         ok = hmac.compare_digest(actual, expected)
         return HashResult(
             digests=digests,
             verified=ok,
-            warnings=(warning,) if warning else (),
+            warnings=tuple(warnings_list),
         )
-    return HashResult(digests=digests)
+    return HashResult(
+        digests=digests,
+        warnings=tuple(warnings_list),
+    )
 
 
 # ---------- CLI ----------
