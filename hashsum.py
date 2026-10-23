@@ -84,10 +84,10 @@ WARN_TARGET_LOOKS_LIKE_PATH = (
 
 # I/O errors
 ERR_IO_STDIN = 'I/O error (stdin): {exc}'
-ERR_FILE_NOT_FOUND = 'File not found: {target}'
-ERR_IS_DIRECTORY = 'This is a directory, not a file: {target}'
-ERR_PERMISSION_DENIED = 'Permission denied for file: {target}'
-ERR_IO_FILE = 'I/O error (file {target}): {exc}'
+ERR_FILE_NOT_FOUND = 'File not found: `{target}`'
+ERR_IS_DIRECTORY = 'This is a directory, not a file: `{target}`'
+ERR_PERMISSION_DENIED = 'Permission denied for file: `{target}`'
+ERR_IO_FILE = 'I/O error (file `{target}`): {exc}'
 
 # Generic wrapper for ValueError from business logic
 ERR_GENERIC = 'Error: {exc}'
